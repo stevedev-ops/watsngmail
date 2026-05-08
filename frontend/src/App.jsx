@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const API_BASE = 'http://localhost:8000/api';
-const WS_BASE = 'ws://localhost:8000/ws/chat/';
-const API_KEY = 'default-key-change-this'; // Matching backend default. In production, use env vars.
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
+const WS_BASE  = import.meta.env.VITE_WS_BASE  || 'ws://localhost:8000/ws/chat/';
+const API_KEY  = import.meta.env.VITE_API_KEY   || 'default-key-change-this';
 
 const fetchWithAuth = (url, options = {}) => {
   return fetch(url, {

@@ -59,7 +59,7 @@ class ConversationListView(APIView):
                 Message.objects.filter(contact_identifier=OuterRef('contact_identifier'), channel='email').order_by('-timestamp').values('subject')[:1]
             ),
             last_media=Subquery(
-                Message.objects.filter(contact_identifier=OuterRef('contact_identifier')).order_by('-timestamp').values('media_url')[:1]
+                Message.objects.filter(contact_identifier=OuterRef('contact_identifier'), channel=OuterRef('channel')).order_by('-timestamp').values('media_url')[:1]
             )
         ).order_by('-last_message')
         
@@ -262,7 +262,10 @@ class UploadView(APIView):
         if ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
             return Response({'error': f'Unsupported file type. Allowed: {", ".join(settings.ALLOWED_UPLOAD_EXTENSIONS)}'}, status=400)
 
-        path = default_storage.save(f'uploads/{file_obj.name}', file_obj)
+        import uuid
+        ext = os.path.splitext(file_obj.name)[1].lower()
+        unique_name = f'uploads/{uuid.uuid4().hex}{ext}'
+        path = default_storage.save(unique_name, file_obj)
         url = request.build_absolute_uri(settings.MEDIA_URL + path)
         return Response({'url': url})
 
