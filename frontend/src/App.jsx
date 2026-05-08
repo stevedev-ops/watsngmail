@@ -2,6 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'http://localhost:8000/api';
 const WS_BASE = 'ws://localhost:8000/ws/chat/';
+const API_KEY = 'default-key-change-this'; // Matching backend default. In production, use env vars.
+
+const fetchWithAuth = (url, options = {}) => {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-API-KEY': API_KEY
+    }
+  });
+};
 
 const Avatar = ({ name, color, size = 40 }) => (
   <div className="avatar" style={{ backgroundColor: color || '#075e54', width: size, height: size }}>
@@ -25,6 +36,7 @@ function App() {
   const [selectedRecipients, setSelectedRecipients] = useState([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showContactDropdown, setShowContactDropdown] = useState(false);
+  const [waProvider, setWaProvider] = useState('twilio');
   
   const messagesEndRef = useRef(null);
   const ws = useRef(null);
@@ -75,7 +87,7 @@ function App() {
 
   const fetchConversations = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/`);
+      const res = await fetchWithAuth(`${API_BASE}/conversations/`);
       const data = await res.json();
       setConversations(data);
     } catch (err) {
@@ -85,7 +97,7 @@ function App() {
 
   const fetchContacts = async () => {
     try {
-      const res = await fetch(`${API_BASE}/contacts/`);
+      const res = await fetchWithAuth(`${API_BASE}/contacts/`);
       const data = await res.json();
       setContacts(data);
     } catch (err) {
@@ -95,7 +107,7 @@ function App() {
 
   const fetchMessages = async (identifier) => {
     try {
-      const res = await fetch(`${API_BASE}/messages/?contact_identifier=${identifier}&channel=${activePlatformRef.current}`);
+      const res = await fetchWithAuth(`${API_BASE}/messages/?contact_identifier=${identifier}&channel=${activePlatformRef.current}`);
       const data = await res.json();
       setMessages(data);
     } catch (err) {
@@ -105,7 +117,7 @@ function App() {
 
   const markAsRead = async (identifier) => {
     try {
-      await fetch(`${API_BASE}/messages/mark_read/`, {
+      await fetchWithAuth(`${API_BASE}/messages/mark_read/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contact_identifier: identifier })
@@ -118,7 +130,7 @@ function App() {
 
   const toggleStar = async (msgId) => {
     try {
-      await fetch(`${API_BASE}/messages/toggle_star/`, {
+      await fetchWithAuth(`${API_BASE}/messages/toggle_star/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: msgId })
@@ -164,11 +176,12 @@ function App() {
       subject: channel === 'email' ? (subject || selectedContact?.subject || 'No Subject') : null,
       media_url: mediaUrl,
       reply_to: replyingTo?.id,
-      thread_id: selectedContact?.thread_id
+      thread_id: selectedContact?.thread_id,
+      provider: channel === 'whatsapp' ? waProvider : undefined
     };
 
     try {
-      const res = await fetch(`${API_BASE}/messages/send/`, {
+      const res = await fetchWithAuth(`${API_BASE}/messages/send/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -208,7 +221,7 @@ function App() {
     formData.append('file', file);
 
     try {
-      const res = await fetch(`${API_BASE}/upload/`, {
+      const res = await fetchWithAuth(`${API_BASE}/upload/`, {
         method: 'POST',
         body: formData
       });
@@ -280,6 +293,12 @@ function App() {
               <button className={sidebarTab === 'chats' ? 'active' : ''} onClick={() => setSidebarTab('chats')}>Recent</button>
               <button className={sidebarTab === 'contacts' ? 'active' : ''} onClick={() => setSidebarTab('contacts')}>Contacts</button>
            </div>
+           {activePlatform === 'whatsapp' && (
+             <div style={{display: 'flex', gap: '6px', marginTop: '10px'}}>
+               <button onClick={() => setWaProvider('twilio')} style={{flex: 1, padding: '5px', borderRadius: '12px', border: 'none', cursor: 'pointer', fontSize: '12px', background: waProvider === 'twilio' ? '#00a884' : '#e0e0e0', color: waProvider === 'twilio' ? 'white' : '#555'}}>Twilio</button>
+               <button onClick={() => setWaProvider('cloud')} style={{flex: 1, padding: '5px', borderRadius: '12px', border: 'none', cursor: 'pointer', fontSize: '12px', background: waProvider === 'cloud' ? '#00a884' : '#e0e0e0', color: waProvider === 'cloud' ? 'white' : '#555'}}>Cloud API</button>
+             </div>
+           )}
         </div>
         
         <div className="inbox-list">

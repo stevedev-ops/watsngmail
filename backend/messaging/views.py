@@ -2,6 +2,7 @@ import json
 import base64
 import os
 import logging
+import requests as http_requests
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -10,7 +11,7 @@ from django.db.models import Max, Count, Q, Subquery, OuterRef
 from django.core.files.storage import default_storage
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, generics
+from rest_framework import generics, permissions
 from twilio.rest import Client
 from .models import Message, Contact
 from .serializers import MessageSerializer, ContactSerializer
@@ -49,10 +50,10 @@ class ConversationListView(APIView):
             last_message=Max('timestamp'),
             unread_count=Count('id', filter=Q(status='delivered', direction='inbound')),
             current_name=Subquery(
-                Message.objects.filter(contact_identifier=OuterRef('contact_identifier')).order_by('-timestamp').values('contact_name')[:1]
+                Message.objects.filter(contact_identifier=OuterRef('contact_identifier'), channel=OuterRef('channel')).order_by('-timestamp').values('contact_name')[:1]
             ),
             last_body=Subquery(
-                Message.objects.filter(contact_identifier=OuterRef('contact_identifier')).order_by('-timestamp').values('body')[:1]
+                Message.objects.filter(contact_identifier=OuterRef('contact_identifier'), channel=OuterRef('channel')).order_by('-timestamp').values('body')[:1]
             ),
             last_subject=Subquery(
                 Message.objects.filter(contact_identifier=OuterRef('contact_identifier'), channel='email').order_by('-timestamp').values('subject')[:1]
@@ -86,22 +87,29 @@ class SendMessageView(APIView):
         media_url = request.data.get('media_url')
         reply_to_id = request.data.get('reply_to')
 
+        provider = request.data.get('provider', 'twilio')
         recipients = [r.strip() for r in to_input.split(',')] if isinstance(to_input, str) else [to_input]
-        
+
         responses = []
         for to in recipients:
             if channel == 'whatsapp':
-                res = self.send_whatsapp(to, body, media_url=media_url, reply_to_id=reply_to_id)
+                res = self.send_whatsapp(to, body, media_url=media_url, reply_to_id=reply_to_id, provider=provider)
             elif channel == 'email':
                 res = self.send_email(to, subject, body, cc=cc, media_url=media_url, reply_to_id=reply_to_id)
+            else:
+                return Response({'error': f"Unknown channel: {channel}"}, status=400)
             responses.append(res.data if hasattr(res, 'data') else res)
 
         return Response(responses[0] if len(responses) == 1 else responses)
 
-    def send_whatsapp(self, to, body, media_url=None, reply_to_id=None):
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+    def send_whatsapp(self, to, body, media_url=None, reply_to_id=None, provider='twilio'):
+        if provider == 'cloud':
+            return self._send_via_cloud(to, body, media_url=media_url, reply_to_id=reply_to_id)
+        return self._send_via_twilio(to, body, media_url=media_url, reply_to_id=reply_to_id)
+
+    def _send_via_twilio(self, to, body, media_url=None, reply_to_id=None):
         try:
-            # FIX: Allow body to be empty for media-only messages
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             message_args = {
                 'from_': settings.TWILIO_WHATSAPP_NUMBER,
                 'to': f'whatsapp:{to}',
@@ -111,7 +119,7 @@ class SendMessageView(APIView):
                 message_args['media_url'] = [media_url]
 
             message = client.messages.create(**message_args)
-            
+
             msg_obj = Message.objects.create(
                 channel='whatsapp',
                 direction='outbound',
@@ -122,13 +130,46 @@ class SendMessageView(APIView):
                 message_id=message.sid,
                 reply_to_id=reply_to_id
             )
-            
             Contact.objects.get_or_create(identifier=to, defaults={'name': to, 'channel': 'whatsapp'})
             self.notify_clients(msg_obj)
             return Response(MessageSerializer(msg_obj).data)
         except Exception as e:
             logger.error(f"Twilio Error: {str(e)}")
             return Response({'error': f"Twilio Error: {str(e)}"}, status=500)
+
+    def _send_via_cloud(self, to, body, media_url=None, reply_to_id=None):
+        try:
+            resp = http_requests.post(
+                f"https://graph.facebook.com/v19.0/{settings.WA_PHONE_NUMBER_ID}/messages",
+                headers={
+                    "Authorization": f"Bearer {settings.WA_ACCESS_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": to,
+                    "type": "text",
+                    "text": {"body": body or ''}
+                }
+            )
+            if resp.status_code != 200:
+                return Response({'error': resp.text}, status=resp.status_code)
+
+            msg_obj = Message.objects.create(
+                channel='whatsapp',
+                direction='outbound',
+                contact_identifier=to,
+                body=body,
+                media_url=media_url,
+                status='sent',
+                reply_to_id=reply_to_id
+            )
+            Contact.objects.get_or_create(identifier=to, defaults={'name': to, 'channel': 'whatsapp'})
+            self.notify_clients(msg_obj)
+            return Response(MessageSerializer(msg_obj).data)
+        except Exception as e:
+            logger.error(f"WhatsApp Cloud Error: {str(e)}")
+            return Response({'error': f"WhatsApp Cloud Error: {str(e)}"}, status=500)
 
     def get_gmail_service(self):
         if os.path.exists(TOKEN_FILE):
@@ -152,7 +193,7 @@ class SendMessageView(APIView):
             message['subject'] = subject
             if cc:
                 message['cc'] = cc
-            message.attach(MIMEText(body))
+            message.attach(MIMEText(body or ''))
 
             if media_url:
                 # Actual file handling logic would go here
@@ -217,11 +258,12 @@ class UploadView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class GmailWebhookView(APIView):
+    permission_classes = [permissions.AllowAny] # External push from Google
     def post(self, request):
         try:
             envelope = request.data
             if 'message' in envelope:
-                data = json.loads(base64.b64decode(envelope['message']['data']))
+                data = json.loads(base64.urlsafe_b64decode(envelope['message']['data'] + '=='))
                 email_address = data.get('emailAddress')
                 history_id = data.get('historyId')
                 
@@ -272,6 +314,7 @@ class GmailWebhookView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class TwilioWebhookView(APIView):
+    permission_classes = [permissions.AllowAny] # External push from Twilio
     def post(self, request):
         from_number = request.data.get('From', '').replace('whatsapp:', '')
         profile_name = request.data.get('ProfileName', from_number)
@@ -301,6 +344,7 @@ class ContactListView(generics.ListAPIView):
     serializer_class = ContactSerializer
 
 class GmailAuthView(APIView):
+    permission_classes = [permissions.AllowAny]
     def get(self, request):
         client_config = {
             "web": {
@@ -319,6 +363,7 @@ class GmailAuthView(APIView):
         return Response({"auth_url": auth_url})
 
 class GmailCallbackView(APIView):
+    permission_classes = [permissions.AllowAny]
     def get(self, request):
         client_config = {
             "web": {
@@ -333,8 +378,44 @@ class GmailCallbackView(APIView):
             scopes=['https://www.googleapis.com/auth/gmail.modify'],
             redirect_uri=settings.GMAIL_REDIRECT_URI
         )
-        flow.fetch_token(code=request.GET.get('code'))
+        code = request.GET.get('code')
+        if not code:
+            return HttpResponse("Authentication cancelled or failed. You can close this tab.", status=400)
+        flow.fetch_token(code=code)
         creds = flow.credentials
         with open(TOKEN_FILE, 'w') as token:
             token.write(creds.to_json())
         return HttpResponse("Authentication Successful! You can close this tab.")
+
+@method_decorator(csrf_exempt, name='dispatch')
+class WhatsAppCloudWebhookView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        if request.GET.get('hub.verify_token') == settings.WA_VERIFY_TOKEN:
+            return HttpResponse(request.GET.get('hub.challenge'))
+        return HttpResponse('Forbidden', status=403)
+
+    def post(self, request):
+        try:
+            entry = request.data.get('entry', [])[0]
+            change = entry.get('changes', [])[0]['value']
+            for wa_msg in change.get('messages', []):
+                from_number = wa_msg['from']
+                body = wa_msg.get('text', {}).get('body', '')
+                msg_id = wa_msg['id']
+                if not Message.objects.filter(message_id=msg_id).exists():
+                    msg_obj = Message.objects.create(
+                        channel='whatsapp',
+                        direction='inbound',
+                        contact_identifier=from_number,
+                        body=body,
+                        status='delivered',
+                        message_id=msg_id
+                    )
+                    Contact.objects.get_or_create(identifier=from_number, defaults={'name': from_number, 'channel': 'whatsapp'})
+                    channel_layer = get_channel_layer()
+                    async_to_sync(channel_layer.group_send)("chat_updates", {"type": "chat_message", "message": MessageSerializer(msg_obj).data})
+        except Exception as e:
+            logger.error(f"WhatsApp Cloud Webhook Error: {str(e)}")
+        return Response({'status': 'ok'})

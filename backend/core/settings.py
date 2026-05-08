@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'channels',
+    'drf_spectacular',
     'messaging',
 ]
 
@@ -85,23 +86,51 @@ USE_TZ = True
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS — allow React dev server
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-]
+# CORS — allow dynamic origins from .env
+CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
 CORS_ALLOW_CREDENTIALS = True
 
 # REST Framework
 REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+    'DEFAULT_PERMISSION_CLASSES': ['messaging.permissions.HasAPIKey'],
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Unified Messaging Hub API',
+    'DESCRIPTION': (
+        'A microservice for sending and receiving messages via WhatsApp (Twilio) and Gmail.\n\n'
+        '## Authentication\n'
+        'All endpoints (except webhooks and Gmail OAuth) require an `X-API-KEY` header.\n\n'
+        '```\nX-API-KEY: your_secret_api_key_here\n```'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_PATCH': True,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'ApiKeyAuth': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'ApiKeyAuth': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X-API-KEY',
+                'description': 'Enter your secret API key.'
+            }
+        }
+    }
 }
 
 # ─── Twilio ───────────────────────────────────────────────
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')
+
+# ─── WhatsApp Cloud API (Meta direct) ─────────────────────
+WA_PHONE_NUMBER_ID = os.getenv('WA_PHONE_NUMBER_ID', '')
+WA_ACCESS_TOKEN    = os.getenv('WA_ACCESS_TOKEN', '')
+WA_VERIFY_TOKEN    = os.getenv('WA_VERIFY_TOKEN', 'my_wa_verify_token')
 
 # ─── Gmail OAuth ──────────────────────────────────────────
 GMAIL_CLIENT_ID = os.getenv('GMAIL_CLIENT_ID', '')
@@ -111,6 +140,9 @@ GMAIL_ACCOUNT = os.getenv('GMAIL_ACCOUNT', 'hasbuinvestments@gmail.com')
 GOOGLE_CLOUD_PROJECT = os.getenv('GOOGLE_CLOUD_PROJECT', '')
 PUBSUB_TOPIC = os.getenv('PUBSUB_TOPIC', '')
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', 'http://localhost:8000')
+
+# API Key for Microservice authentication
+API_KEY = os.getenv('API_KEY', 'default-key-change-this')
 
 # Store OAuth token in project root
 GMAIL_TOKEN_FILE = BASE_DIR / 'gmail_token.json'

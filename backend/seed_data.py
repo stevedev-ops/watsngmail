@@ -9,7 +9,6 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 
 from messaging.models import Message, Contact
-from django.utils import timezone
 
 def seed():
     # Clear existing data for a fresh look

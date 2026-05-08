@@ -10,6 +10,7 @@ urlpatterns = [
     path('messages/send/', views.SendMessageView.as_view(), name='send-message'),
     path('upload/', views.UploadView.as_view(), name='file-upload'),
     path('webhooks/twilio/', views.TwilioWebhookView.as_view(), name='twilio-webhook'),
+    path('webhooks/whatsapp/', views.WhatsAppCloudWebhookView.as_view(), name='whatsapp-cloud-webhook'),
     path('webhooks/gmail/', views.GmailWebhookView.as_view(), name='gmail-webhook'),
     path('gmail/auth/', views.GmailAuthView.as_view(), name='gmail-auth'),
     path('gmail/callback/', views.GmailCallbackView.as_view(), name='gmail-callback'),
