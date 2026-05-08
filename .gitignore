@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+db.sqlite3
+media/
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# OAuth
+gmail_token.json
+client_secrets.json
