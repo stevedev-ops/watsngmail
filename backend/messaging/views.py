@@ -252,6 +252,16 @@ class UploadView(APIView):
         file_obj = request.FILES.get('file')
         if not file_obj:
             return Response({'error': 'No file'}, status=400)
+            
+        # 1. Size Validation
+        if file_obj.size > settings.MAX_UPLOAD_SIZE:
+            return Response({'error': 'File too large (Max 10MB)'}, status=400)
+            
+        # 2. Extension Validation
+        ext = os.path.splitext(file_obj.name)[1].lower()
+        if ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
+            return Response({'error': f'Unsupported file type. Allowed: {", ".join(settings.ALLOWED_UPLOAD_EXTENSIONS)}'}, status=400)
+
         path = default_storage.save(f'uploads/{file_obj.name}', file_obj)
         url = request.build_absolute_uri(settings.MEDIA_URL + path)
         return Response({'url': url})
